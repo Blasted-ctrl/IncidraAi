@@ -1,0 +1,885 @@
+openapi: 3.1.0
+info:
+  title: Incident Triage API
+  description: AI-assisted incident triage system for triaging logs, alerts and incidents
+  version: 1.0.0
+  contact:
+    name: Support
+servers:
+  - url: http://localhost:8000
+    description: Development server
+  - url: https://api.example.com
+    description: Production server
+
+paths:
+  /logs:
+    get:
+      summary: List logs
+      description: Retrieve logs with optional filtering and pagination
+      operationId: listLogs
+      tags:
+        - logs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: incident_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter logs by incident ID
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter logs by cluster ID
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+          description: Filter logs by severity level
+        - name: start_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter logs after this timestamp
+        - name: end_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter logs before this timestamp
+      responses:
+        "200":
+          description: Successful response with logs list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogList"
+        "400":
+          description: Invalid filter parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      summary: Create a log entry
+      description: Create a new log entry with optional trace data
+      operationId: createLog
+      tags:
+        - logs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLogRequest"
+      responses:
+        "201":
+          description: Log created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Log"
+        "400":
+          description: Invalid log data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /logs/{logId}:
+    get:
+      summary: Get log details
+      description: Retrieve detailed information about a specific log entry
+      operationId: getLog
+      tags:
+        - logs
+      parameters:
+        - name: logId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Log details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogDetail"
+        "404":
+          description: Log not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /incidents:
+    get:
+      summary: List incidents
+      description: Retrieve incidents with optional filtering and sorting
+      operationId: listIncidents
+      tags:
+        - incidents
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, INVESTIGATING, RESOLVED, CLOSED]
+          description: Filter incidents by status
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [LOW, MEDIUM, HIGH, CRITICAL]
+          description: Filter incidents by severity
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [created_at, updated_at, severity]
+            default: created_at
+      responses:
+        "200":
+          description: Successful response with incidents list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentList"
+        "400":
+          description: Invalid filter parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      summary: Create an incident
+      description: Create a new incident
+      operationId: createIncident
+      tags:
+        - incidents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIncidentRequest"
+      responses:
+        "201":
+          description: Incident created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "400":
+          description: Invalid incident data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /incidents/{incidentId}:
+    get:
+      summary: Get incident details
+      description: Retrieve detailed information about a specific incident
+      operationId: getIncident
+      tags:
+        - incidents
+      parameters:
+        - name: incidentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Incident details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentDetail"
+        "404":
+          description: Incident not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    patch:
+      summary: Update incident
+      description: Update an existing incident
+      operationId: updateIncident
+      tags:
+        - incidents
+      parameters:
+        - name: incidentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIncidentRequest"
+      responses:
+        "200":
+          description: Incident updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "400":
+          description: Invalid update data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Incident not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /triage:
+    post:
+      summary: Triage an incident
+      description: Generate root cause hypotheses and mitigation steps using AI analysis
+      operationId: triageIncident
+      tags:
+        - triage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriageRequest"
+      responses:
+        "200":
+          description: Triage analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriageResult"
+        "400":
+          description: Invalid triage request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error or triaging service temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /triage/{triageId}:
+    get:
+      summary: Get triage result
+      description: Retrieve a previously generated triage result
+      operationId: getTriageResult
+      tags:
+        - triage
+      parameters:
+        - name: triageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Triage result details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriageResult"
+        "404":
+          description: Triage result not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /triage/{triageId}/feedback:
+    post:
+      summary: Submit triage feedback
+      description: Provide feedback on triage results to improve AI model
+      operationId: submitTriageFeedback
+      tags:
+        - triage
+      parameters:
+        - name: triageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriageFeedback"
+      responses:
+        "204":
+          description: Feedback submitted successfully
+        "400":
+          description: Invalid feedback data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Triage result not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    # Logs
+    Log:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        timestamp:
+          type: string
+          format: date-time
+        source:
+          type: string
+          description: Service or component that generated the log
+        trace_id:
+          type: string
+          format: uuid
+          nullable: true
+        span_id:
+          type: string
+          format: uuid
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - message
+        - severity
+        - timestamp
+        - source
+
+    LogDetail:
+      allOf:
+        - $ref: "#/components/schemas/Log"
+        - type: object
+          properties:
+            cluster_id:
+              type: string
+              format: uuid
+              nullable: true
+            incident_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+            related_logs:
+              type: array
+              items:
+                $ref: "#/components/schemas/Log"
+
+    LogList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Log"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+
+    CreateLogRequest:
+      type: object
+      properties:
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        source:
+          type: string
+        trace_id:
+          type: string
+          format: uuid
+          nullable: true
+        span_id:
+          type: string
+          format: uuid
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+      required:
+        - message
+        - severity
+        - source
+
+    # Incidents
+    Incident:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, INVESTIGATING, RESOLVED, CLOSED]
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        assigned_to:
+          type: string
+          nullable: true
+        cluster_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+        - id
+        - title
+        - status
+        - severity
+        - created_at
+        - updated_at
+
+    IncidentDetail:
+      allOf:
+        - $ref: "#/components/schemas/Incident"
+        - type: object
+          properties:
+            logs:
+              type: array
+              items:
+                $ref: "#/components/schemas/Log"
+            triage_results:
+              type: array
+              items:
+                $ref: "#/components/schemas/TriageResult"
+            timeline:
+              type: array
+              items:
+                $ref: "#/components/schemas/TimelineEvent"
+
+    IncidentList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Incident"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+
+    CreateIncidentRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        cluster_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          default: []
+      required:
+        - title
+        - severity
+
+    UpdateIncidentRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, INVESTIGATING, RESOLVED, CLOSED]
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        assigned_to:
+          type: string
+          nullable: true
+
+    TimelineEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+          enum: [STATUS_CHANGE, ASSIGNMENT, TRIAGE, COMMENT, RESOLUTION]
+        actor:
+          type: string
+          nullable: true
+        details:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - timestamp
+        - event_type
+
+    # Triage
+    RootCauseHypothesis:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        hypothesis:
+          type: string
+          description: Detailed root cause hypothesis
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence score between 0 and 1
+        supporting_logs:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of logs supporting this hypothesis
+        relevant_runbooks:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              title:
+                type: string
+              url:
+                type: string
+                format: uri
+        similar_incidents:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              title:
+                type: string
+              resolution:
+                type: string
+      required:
+        - id
+        - hypothesis
+        - confidence
+
+    MitigationStep:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        step:
+          type: string
+          description: Mitigation action to take
+        order:
+          type: integer
+          description: Execution order
+        estimated_time_minutes:
+          type: integer
+          nullable: true
+        risk_level:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        automation_possible:
+          type: boolean
+          description: Whether this step can be automated
+      required:
+        - id
+        - step
+        - order
+
+    TriageRequest:
+      type: object
+      properties:
+        incident_id:
+          type: string
+          format: uuid
+          description: ID of the incident to triage
+        log_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of logs to analyze
+        context:
+          type: object
+          additionalProperties: true
+          description: Additional context for triage (e.g., deployment info, alerts)
+      required:
+        - incident_id
+        - log_ids
+
+    TriageResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        incident_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        root_cause_hypotheses:
+          type: array
+          items:
+            $ref: "#/components/schemas/RootCauseHypothesis"
+        mitigation_steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/MitigationStep"
+        summary:
+          type: string
+          description: Executive summary of triage results
+        confidence_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        model_version:
+          type: string
+      required:
+        - id
+        - incident_id
+        - created_at
+        - root_cause_hypotheses
+        - mitigation_steps
+        - summary
+
+    TriageFeedback:
+      type: object
+      properties:
+        correct_hypothesis:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the correct hypothesis (if any)
+        actual_root_cause:
+          type: string
+          nullable: true
+          description: Actual root cause if different from hypotheses
+        helpful_steps:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: IDs of mitigation steps that were helpful
+        resolution_time_minutes:
+          type: integer
+          nullable: true
+          description: Time taken to resolve the incident
+        comment:
+          type: string
+          nullable: true
+      required:
+        - helpful_steps
+
+    # Error
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      required:
+        - code
+        - message
+
+    # Cluster (for relationships)
+    Cluster:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        log_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+      required:
+        - id
+        - name
+        - log_count
+        - created_at
