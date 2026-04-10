@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover - optional observability dependency
     make_asgi_app = None
 
 
-SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "incident-triage-api")
+SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "incidra-api")
 SERVICE_VERSION = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 
 class _NoOpMetric:

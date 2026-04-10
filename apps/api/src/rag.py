@@ -67,21 +67,35 @@ class EmbeddingStore:
     def add_runbook_to_store(self, runbook_id: str, runbook_text: str, metadata: Dict[str, Any]):
         """Add runbook to vector store."""
         embedding = self.embed_text(runbook_text)
-        
-        self.runbooks_collection.add(
+
+        # ChromaDB only supports str/int/float/bool metadata values — coerce lists to strings
+        safe_metadata = {
+            k: (", ".join(v) if isinstance(v, list) else v)
+            for k, v in metadata.items()
+            if v is not None
+        }
+
+        # Upsert so repeated ingest calls don't raise DuplicateIDError
+        self.runbooks_collection.upsert(
             ids=[runbook_id],
             embeddings=[embedding],
-            metadatas=[metadata],
+            metadatas=[safe_metadata],
             documents=[runbook_text]
         )
     
     def retrieve_similar_logs(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Retrieve similar logs for a query."""
         query_embedding = self.embed_text(query)
-        
+
+        # ChromaDB raises if n_results > number of items in collection
+        count = self.logs_collection.count()
+        if count == 0:
+            return {"documents": [], "metadatas": [], "distances": []}
+        n_results = min(top_k, count)
+
         results = self.logs_collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k
+            n_results=n_results
         )
         
         return {
@@ -93,10 +107,15 @@ class EmbeddingStore:
     def retrieve_relevant_runbooks(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """Retrieve relevant runbooks for a query."""
         query_embedding = self.embed_text(query)
-        
+
+        count = self.runbooks_collection.count()
+        if count == 0:
+            return {"documents": [], "metadatas": [], "distances": []}
+        n_results = min(top_k, count)
+
         results = self.runbooks_collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k
+            n_results=n_results
         )
         
         return {
@@ -345,13 +364,20 @@ class IncidentRAG:
         Returns:
             Complete RAG analysis with reasoning
         """
-        # Add logs to vector store for retrieval
-        for i, log in enumerate(logs):
-            self.embedding_store.add_log_to_store(
-                log_id=f"log-{i}",
-                log_text=log,
-                metadata={"index": i, "timestamp": datetime.now(timezone.utc).isoformat()}
-            )
+        # Add logs to vector store for retrieval.
+        # Use a content-hash as the ID so repeated calls with the same log text
+        # are idempotent (upsert avoids DuplicateIDError).
+        for log in logs:
+            log_id = hashlib.sha256(log.encode()).hexdigest()[:32]
+            try:
+                self.embedding_store.logs_collection.upsert(
+                    ids=[log_id],
+                    embeddings=[self.embedding_store.embed_text(log)],
+                    metadatas=[{"timestamp": datetime.now(timezone.utc).isoformat()}],
+                    documents=[log],
+                )
+            except Exception:
+                pass  # best-effort; retrieval below will still work for already-stored logs
         
         # Retrieve similar logs
         similar_logs = self.embedding_store.retrieve_similar_logs(

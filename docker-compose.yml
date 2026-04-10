@@ -2,10 +2,10 @@ services:
   # PostgreSQL database
   postgres:
     image: postgres:16-alpine
-    container_name: incident_triage_postgres
+    container_name: incidra_postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: FordsonHigh12
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: incident_triage
     ports:
       - "5432:5432"
@@ -20,7 +20,7 @@ services:
   # Redis for Celery and caching
   redis:
     image: redis:7-alpine
-    container_name: incident_triage_redis
+    container_name: incidra_redis
     ports:
       - "6379:6379"
     volumes:
@@ -36,12 +36,12 @@ services:
   api:
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
-    container_name: incident_triage_api
+      dockerfile: DockerFile
+    container_name: incidra_api
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://postgres:FordsonHigh12@postgres:5432/incident_triage
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@postgres:5432/incident_triage
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
@@ -50,7 +50,7 @@ services:
       - DB_HOST=postgres
       - DB_NAME=incident_triage
       - DB_USER=postgres
-      - DB_PASSWORD=FordsonHigh12
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_PORT=5432
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
@@ -63,8 +63,8 @@ services:
   celery_worker:
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
-    container_name: incident_triage_celery_worker
+      dockerfile: DockerFile
+    container_name: incidra_celery_worker
     command: celery -A src.celery_app worker --loglevel=info --concurrency=4 --queues=default,clustering,dead_letter
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -75,7 +75,7 @@ services:
       - DB_HOST=postgres
       - DB_NAME=incident_triage
       - DB_USER=postgres
-      - DB_PASSWORD=FordsonHigh12
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_PORT=5432
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
@@ -88,9 +88,9 @@ services:
   celery_beat:
     build:
       context: ./apps/api
-      dockerfile: Dockerfile
-    container_name: incident_triage_celery_beat
-    command: celery -A src.celery_app beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+      dockerfile: DockerFile
+    container_name: incidra_celery_beat
+    command: celery -A src.celery_app beat --loglevel=info
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
@@ -100,7 +100,7 @@ services:
       - DB_HOST=postgres
       - DB_NAME=incident_triage
       - DB_USER=postgres
-      - DB_PASSWORD=FordsonHigh12
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_PORT=5432
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
@@ -113,8 +113,8 @@ services:
   web:
     build:
       context: ./apps/web
-      dockerfile: Dockerfile
-    container_name: incident_triage_web
+      dockerfile: DockerFile
+    container_name: incidra_web
     ports:
       - "3000:3000"
     environment:

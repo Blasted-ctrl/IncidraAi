@@ -154,3 +154,22 @@ CREATE TABLE IF NOT EXISTS triage_feedback (
 
 CREATE INDEX IF NOT EXISTS idx_feedback_triage ON triage_feedback(triage_result_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_type ON triage_feedback(feedback_type);
+
+-- ============================================================================
+-- Dead-Letter Queue Table
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS dead_letter_queue (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_name VARCHAR(255) NOT NULL,
+    task_id VARCHAR(255) NOT NULL UNIQUE,
+    task_args JSONB,
+    task_kwargs JSONB,
+    error_message TEXT,
+    error_traceback TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(50) DEFAULT 'pending'
+);
+
+CREATE INDEX IF NOT EXISTS idx_dlq_task_id ON dead_letter_queue(task_id);
+CREATE INDEX IF NOT EXISTS idx_dlq_status ON dead_letter_queue(status);
+CREATE INDEX IF NOT EXISTS idx_dlq_created_at ON dead_letter_queue(created_at DESC);

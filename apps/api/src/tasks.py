@@ -99,14 +99,14 @@ def cluster_logs(
             conn = psycopg2.connect(**DB_CONFIG)
             cursor = conn.cursor()
             
-            # Fetch logs from database
-            log_ids_str = ','.join(f"'{log_id}'" for log_id in log_ids)
-            cursor.execute(f"""
-                SELECT id, message, source, severity, timestamp
-                FROM logs
-                WHERE id IN ({log_ids_str})
-                ORDER BY timestamp DESC
-            """)
+            # Fetch logs from database — use ANY(%s) with a typed array to avoid
+            # f-string SQL injection and to correctly handle UUID casting.
+            from psycopg2.extras import execute_values
+            cursor.execute(
+                "SELECT id, message, source, severity, timestamp FROM logs"
+                " WHERE id = ANY(%s) ORDER BY timestamp DESC",
+                (log_ids,),
+            )
             
             logs = cursor.fetchall()
             

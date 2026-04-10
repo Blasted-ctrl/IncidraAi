@@ -14,8 +14,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "AI Incident Triage Copilot",
-  description: "Premium incident triage workspace for log analysis, root cause hypotheses, and mitigation guidance.",
+  title: "Incidra — AI Incident Intelligence",
+  description: "Incidra clusters noisy signals, retrieves the right runbooks, and delivers root cause hypotheses in under 3 seconds.",
 };
 
 export default function RootLayout({

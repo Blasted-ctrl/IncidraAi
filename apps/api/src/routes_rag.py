@@ -2,14 +2,20 @@
 FastAPI endpoints for RAG-powered incident analysis.
 """
 
-from fastapi import APIRouter, HTTPException, Body
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Body, Request
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import os
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from src.observability import get_tracer, track_latency, triage_latency_seconds
 from src.rag import IncidentRAG
+
+# Module-level limiter — the app attaches it to app.state in main.py.
+# Decorating with this instance means slowapi reads limits from the same store.
+limiter = Limiter(key_func=get_remote_address)
 
 # Initialize RAG system
 rag_system = None
@@ -21,12 +27,9 @@ def get_rag_system() -> IncidentRAG:
     global rag_system
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 
-    should_reinitialize = (
-        rag_system is None
-        or (
-            anthropic_key
-            and getattr(getattr(rag_system, "reasoner", None), "client", None) is None
-        )
+    should_reinitialize = rag_system is None or (
+        anthropic_key
+        and getattr(getattr(rag_system, "reasoner", None), "client", None) is None
     )
 
     if should_reinitialize:
@@ -180,12 +183,27 @@ Steps to troubleshoot pod deployment failures:
 
 class RAGAnalysisRequest(BaseModel):
     """Request for RAG-powered incident analysis."""
-    
-    incident_summary: str = Field(..., description="Human-readable incident summary")
-    logs: List[str] = Field(..., description="Log messages to analyze")
+
+    incident_summary: str = Field(
+        ..., min_length=1, max_length=2000, description="Human-readable incident summary"
+    )
+    logs: List[str] = Field(
+        ..., min_length=1, max_length=100, description="Log messages to analyze (max 100 lines)"
+    )
     cluster_info: Optional[Dict[str, Any]] = Field(None, description="Cluster metadata")
-    top_k_logs: int = Field(5, ge=1, le=20, description="Number of similar logs to retrieve")
-    top_k_runbooks: int = Field(3, ge=1, le=10, description="Number of runbooks to retrieve")
+    top_k_logs: int = Field(5, ge=1, le=10, description="Number of similar logs to retrieve")
+    top_k_runbooks: int = Field(3, ge=1, le=5, description="Number of runbooks to retrieve")
+
+    @field_validator("logs")
+    @classmethod
+    def truncate_log_lines(cls, v: List[str]) -> List[str]:
+        """Cap each log line at 500 chars to prevent prompt stuffing."""
+        return [line[:500] for line in v]
+
+    @field_validator("incident_summary")
+    @classmethod
+    def strip_summary(cls, v: str) -> str:
+        return v.strip()
 
 
 class RetrievedContent(BaseModel):
@@ -224,7 +242,8 @@ router = APIRouter(prefix="/api/rag", tags=["rag"])
 
 
 @router.post("/analyze", response_model=RAGAnalysisResponse)
-async def analyze_incident(request: RAGAnalysisRequest = Body(...)):
+@limiter.limit("10/minute")
+async def analyze_incident(http_request: Request, request: RAGAnalysisRequest = Body(...)):
     """
     Analyze incident using RAG system.
     
@@ -273,10 +292,12 @@ async def rag_health():
     """Health check for RAG system."""
     try:
         rag = get_rag_system()
+        anthropic_ready = getattr(rag.reasoner, "client", None) is not None
         return {
             "status": "healthy",
             "rag_initialized": rag is not None,
-            "anthropic_configured": getattr(rag.reasoner, "client", None) is not None,
+            "anthropic_configured": anthropic_ready,
+            "anthropic_key_present": bool(os.getenv("ANTHROPIC_API_KEY")),
             "embedding_model": "all-MiniLM-L6-v2",
             "vector_store": "chromadb",
             "timestamp": datetime.now(timezone.utc).isoformat()
@@ -286,7 +307,8 @@ async def rag_health():
 
 
 @router.post("/ingest-runbooks")
-async def ingest_runbooks(runbooks: List[Dict[str, Any]] = Body(...)):
+@limiter.limit("5/minute")
+async def ingest_runbooks(http_request: Request, runbooks: List[Dict[str, Any]] = Body(...)):
     """
     Ingest runbooks into vector store for RAG retrieval.
     
