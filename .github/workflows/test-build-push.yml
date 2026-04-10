@@ -50,9 +50,18 @@ jobs:
       - name: Run unit tests with coverage gate
         working-directory: ./apps/api
         run: |
-          pytest test/test_clustering_unit.py \
+          pytest --override-ini addopts= \
+            test/test_integration.py \
+            test/test_celery.py \
+            test/test_runtime_quality.py \
             -v \
-            --cov=src \
+            --cov=src.main \
+            --cov=src.routes_clustering \
+            --cov=src.routes_rag \
+            --cov=src.tasks \
+            --cov=src.observability \
+            --cov=src.config \
+            --cov=src.rag \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=${{ env.COVERAGE_THRESHOLD }}

@@ -18,6 +18,12 @@ import type {
   TriageRequest,
   TriageResult,
   TriageFeedback,
+  ClusterLogsRequest,
+  ClusterLogsResponse,
+  TaskStatusResponse,
+  RAGAnalyzeRequest,
+  RAGAnalyzeResponse,
+  RAGHealthResponse,
   LogListParams,
   IncidentListParams,
   ClientConfig,
@@ -284,6 +290,66 @@ export class TriageClient {
       return false;
     }
   }
+
+  /**
+   * Check the RAG subsystem health and provider configuration.
+   */
+  async ragHealth(options?: RequestOptions) {
+    return this.request<RAGHealthResponse>("GET", "/api/rag/health", options);
+  }
+
+  /**
+   * Analyze incident context using the RAG pipeline.
+   */
+  async analyzeIncident(
+    request: RAGAnalyzeRequest,
+    options?: RequestOptions
+  ) {
+    if (!request.incident_summary.trim()) {
+      throw new Error("Incident summary is required");
+    }
+    if (!Array.isArray(request.logs) || request.logs.length === 0) {
+      throw new Error("At least one log line is required");
+    }
+    return this.request<RAGAnalyzeResponse>("POST", "/api/rag/analyze", {
+      ...options,
+      body: request,
+    });
+  }
+
+  /**
+   * Submit a clustering job for a batch of log IDs.
+   */
+  async submitClusteringJob(
+    request: ClusterLogsRequest,
+    options?: RequestOptions
+  ) {
+    if (!Array.isArray(request.log_ids) || request.log_ids.length === 0) {
+      throw new Error("At least one log ID is required");
+    }
+    return this.request<ClusterLogsResponse>(
+      "POST",
+      "/api/clustering/cluster-logs",
+      {
+        ...options,
+        body: request,
+      }
+    );
+  }
+
+  /**
+   * Get the status of an existing clustering job.
+   */
+  async getClusteringTaskStatus(taskId: string, options?: RequestOptions) {
+    if (!taskId.trim()) {
+      throw new Error("Task ID is required");
+    }
+    return this.request<TaskStatusResponse>(
+      "GET",
+      `/api/clustering/tasks/${taskId}`,
+      options
+    );
+  }
 }
 
 /**
@@ -369,4 +435,29 @@ export async function submitTriageFeedback(
   options?: RequestOptions
 ) {
   return getDefaultClient().submitTriageFeedback(triageId, feedback, options);
+}
+
+export async function ragHealth(options?: RequestOptions) {
+  return getDefaultClient().ragHealth(options);
+}
+
+export async function analyzeIncident(
+  request: RAGAnalyzeRequest,
+  options?: RequestOptions
+) {
+  return getDefaultClient().analyzeIncident(request, options);
+}
+
+export async function submitClusteringJob(
+  request: ClusterLogsRequest,
+  options?: RequestOptions
+) {
+  return getDefaultClient().submitClusteringJob(request, options);
+}
+
+export async function getClusteringTaskStatus(
+  taskId: string,
+  options?: RequestOptions
+) {
+  return getDefaultClient().getClusteringTaskStatus(taskId, options);
 }

@@ -64,7 +64,9 @@ class TestClusterLogsTask:
     """Tests for cluster_logs task"""
     
     @patch('src.tasks.psycopg2.connect')
-    def test_cluster_logs_success(self, mock_connect):
+    @patch('src.tasks.mark_log_hash_seen')
+    @patch('src.tasks.is_log_duplicate', return_value=False)
+    def test_cluster_logs_success(self, mock_is_duplicate, mock_mark_seen, mock_connect):
         """Test successful log clustering"""
         
         # Mock database connection
@@ -107,7 +109,9 @@ class TestClusterLogsTask:
         assert result["logs_clustered"] == 0
     
     @patch('src.tasks.psycopg2.connect')
-    def test_cluster_logs_with_cluster_id(self, mock_connect):
+    @patch('src.tasks.mark_log_hash_seen')
+    @patch('src.tasks.is_log_duplicate', return_value=False)
+    def test_cluster_logs_with_cluster_id(self, mock_is_duplicate, mock_mark_seen, mock_connect):
         """Test adding logs to existing cluster"""
         
         mock_cursor = MagicMock()

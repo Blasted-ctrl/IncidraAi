@@ -8,28 +8,40 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import os
 
+from src.observability import get_tracer, track_latency, triage_latency_seconds
 from src.rag import IncidentRAG
 
 # Initialize RAG system
 rag_system = None
+tracer = get_tracer(__name__)
 
 
 def get_rag_system() -> IncidentRAG:
     """Lazy initialize RAG system."""
     global rag_system
-    if rag_system is None:
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+
+    should_reinitialize = (
+        rag_system is None
+        or (
+            anthropic_key
+            and getattr(getattr(rag_system, "reasoner", None), "client", None) is None
+        )
+    )
+
+    if should_reinitialize:
         rag_system = IncidentRAG(
             embedding_model="all-MiniLM-L6-v2",
-            llm_model="claude-3-5-sonnet-20241022",
+            llm_model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
             persist_dir="./vector_db",
-            anthropic_key=os.getenv("ANTHROPIC_API_KEY")
+            anthropic_key=anthropic_key
         )
         # Load default runbooks
-        _load_default_runbooks()
+        _load_default_runbooks(rag_system)
     return rag_system
 
 
-def _load_default_runbooks():
+def _load_default_runbooks(rag: IncidentRAG):
     """Load default runbooks into RAG system."""
     runbooks = [
         {
@@ -157,8 +169,7 @@ Steps to troubleshoot pod deployment failures:
     ]
     
     try:
-        rag_system = get_rag_system()
-        rag_system.ingest_runbooks(runbooks)
+        rag.ingest_runbooks(runbooks)
     except Exception as e:
         print(f"Warning: Could not load runbooks: {e}")
 
@@ -220,36 +231,38 @@ async def analyze_incident(request: RAGAnalysisRequest = Body(...)):
     Retrieves similar logs and relevant runbooks, then uses LLM to reason about the incident.
     """
     try:
-        rag = get_rag_system()
-        
-        result = rag.analyze_incident(
-            incident_summary=request.incident_summary,
-            logs=request.logs,
-            cluster_info=request.cluster_info,
-            top_k_logs=request.top_k_logs,
-            top_k_runbooks=request.top_k_runbooks
-        )
-        
-        return RAGAnalysisResponse(
-            incident_summary=result["incident_summary"],
-            retrieved_logs=RetrievedContent(
-                count=result["retrieved_logs"]["count"],
-                documents=result["retrieved_logs"]["logs"],
-                relevance_scores=result["retrieved_logs"]["relevance_scores"]
-            ),
-            retrieved_runbooks=RetrievedContent(
-                count=result["retrieved_runbooks"]["count"],
-                documents=result["retrieved_runbooks"]["runbooks"],
-                relevance_scores=result["retrieved_runbooks"]["relevance_scores"]
-            ),
-            reasoning=ReasoningResult(
-                success=result["reasoning"]["success"],
-                warning=result["reasoning"].get("warning"),
-                reasoning=result["reasoning"].get("reasoning", {}),
-                model=result["reasoning"]["model"],
-                tokens_used=result["reasoning"]["tokens_used"]
-            )
-        )
+        with tracer.start_as_current_span("rag_analyze_incident"):
+            with track_latency(triage_latency_seconds, "/api/rag/analyze"):
+                rag = get_rag_system()
+
+                result = rag.analyze_incident(
+                    incident_summary=request.incident_summary,
+                    logs=request.logs,
+                    cluster_info=request.cluster_info,
+                    top_k_logs=request.top_k_logs,
+                    top_k_runbooks=request.top_k_runbooks
+                )
+
+                return RAGAnalysisResponse(
+                    incident_summary=result["incident_summary"],
+                    retrieved_logs=RetrievedContent(
+                        count=result["retrieved_logs"]["count"],
+                        documents=result["retrieved_logs"]["logs"],
+                        relevance_scores=result["retrieved_logs"]["relevance_scores"]
+                    ),
+                    retrieved_runbooks=RetrievedContent(
+                        count=result["retrieved_runbooks"]["count"],
+                        documents=result["retrieved_runbooks"]["runbooks"],
+                        relevance_scores=result["retrieved_runbooks"]["relevance_scores"]
+                    ),
+                    reasoning=ReasoningResult(
+                        success=result["reasoning"]["success"],
+                        warning=result["reasoning"].get("warning"),
+                        reasoning=result["reasoning"].get("reasoning", {}),
+                        model=result["reasoning"]["model"],
+                        tokens_used=result["reasoning"]["tokens_used"]
+                    )
+                )
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG analysis failed: {str(e)}")
@@ -263,6 +276,7 @@ async def rag_health():
         return {
             "status": "healthy",
             "rag_initialized": rag is not None,
+            "anthropic_configured": getattr(rag.reasoner, "client", None) is not None,
             "embedding_model": "all-MiniLM-L6-v2",
             "vector_store": "chromadb",
             "timestamp": datetime.now(timezone.utc).isoformat()

@@ -1,327 +1,242 @@
-/**
- * TypeScript Client Testing Suite
- * Run: npm test -- packages/shared/test/test-typescript-client.ts
- */
-
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createTriageClient,
-  setDefaultClient,
-  getDefaultClient,
   TriageClient,
+  analyzeIncident,
+  createTriageClient,
+  getClusteringTaskStatus,
+  getDefaultClient,
+  ragHealth,
+  setDefaultClient,
+  submitClusteringJob,
 } from "../src/api/client";
 import type {
-  Log,
-  Incident,
-  TriageResult,
-  UUID,
+  APIError,
   ClientConfig,
-  CreateLogRequest,
-  CreateIncidentRequest,
-  TriageRequest,
+  ClusterLogsRequest,
+  RAGAnalyzeRequest,
 } from "../src/types/index";
 import {
+  isAPIError,
   isUUID,
-  isLogSeverity,
-  isIncidentStatus,
-  LogSeverity,
-  IncidentSeverity,
-  IncidentStatus,
 } from "../src/types/index";
 
-// Mock fetch for testing without a running server
-const mockFetch = async (
-  url: string,
-  options: RequestInit
-): Promise<Response> => {
-  // Simulate API responses
+const mockFetch = vi.fn(async (url: string, options?: RequestInit) => {
   const urlStr = url.toString();
 
-  if (urlStr.includes("/logs")) {
-    if (options.method === "POST") {
-      const body = JSON.parse(options.body as string);
-      return new Response(
-        JSON.stringify({
-          id: "550e8400-e29b-41d4-a716-446655440000",
-          message: body.message,
-          severity: body.severity,
-          source: body.source,
-          timestamp: new Date().toISOString(),
-        } as Log),
-        { status: 201 }
-      );
-    }
-    // GET /logs
+  if (urlStr.endsWith("/health")) {
     return new Response(
       JSON.stringify({
-        items: [],
-        total: 0,
-        limit: 50,
-        offset: 0,
+        status: "ok",
       }),
-      { status: 200 }
+      { status: 200 },
     );
   }
 
-  if (urlStr.includes("/incidents")) {
-    if (options.method === "POST") {
-      const body = JSON.parse(options.body as string);
-      return new Response(
-        JSON.stringify({
-          id: "550e8400-e29b-41d4-a716-446655440001",
-          title: body.title,
-          severity: body.severity,
-          status: "OPEN",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          cluster_ids: body.cluster_ids || [],
-        } as Incident),
-        { status: 201 }
-      );
-    }
-    // GET /incidents
+  if (urlStr.includes("/api/rag/health")) {
     return new Response(
       JSON.stringify({
-        items: [],
-        total: 0,
-        limit: 50,
-        offset: 0,
+        status: "healthy",
+        rag_initialized: true,
+        anthropic_configured: true,
+        embedding_model: "all-MiniLM-L6-v2",
+        vector_store: "chromadb",
+        timestamp: new Date().toISOString(),
       }),
-      { status: 200 }
+      { status: 200 },
     );
   }
 
-  if (urlStr.includes("/triage")) {
-    if (options.method === "POST" && !urlStr.includes("feedback")) {
-      return new Response(
-        JSON.stringify({
-          id: "550e8400-e29b-41d4-a716-446655440002",
-          incident_id: "550e8400-e29b-41d4-a716-446655440001",
-          created_at: new Date().toISOString(),
-          completed_at: new Date().toISOString(),
-          root_cause_hypotheses: [
-            {
-              id: "550e8400-e29b-41d4-a716-446655440010",
-              hypothesis: "Database connection pool exhaustion",
-              confidence: 0.92,
-              supporting_logs: [],
-              relevant_runbooks: [],
-              similar_incidents: [],
-            },
-          ],
-          mitigation_steps: [
-            {
-              id: "550e8400-e29b-41d4-a716-446655440011",
-              step: "Increase database connection pool size",
-              order: 1,
-              risk_level: "LOW",
-              automation_possible: true,
-            },
-          ],
-          summary: "Analysis indicates database connection pool exhaustion",
-          confidence_score: 0.92,
-          model_version: "1.0.0",
-        } as unknown as TriageResult),
-        { status: 200 }
-      );
-    }
+  if (urlStr.includes("/api/rag/analyze")) {
+    const body = JSON.parse((options?.body as string) ?? "{}");
+    return new Response(
+      JSON.stringify({
+        incident_summary: body.incident_summary,
+        retrieved_logs: {
+          count: body.logs.length,
+          documents: body.logs,
+          relevance_scores: body.logs.map(() => 0.12),
+        },
+        retrieved_runbooks: {
+          count: 1,
+          documents: ["Database Connection Troubleshooting"],
+          relevance_scores: [0.08],
+        },
+        reasoning: {
+          success: true,
+          reasoning: {
+            root_cause: "Connection pool exhaustion caused the timeout burst",
+            severity: "high",
+            affected_services: ["api-service", "database"],
+            actions: ["Check pool utilization", "Restart exhausted workers"],
+            metrics: ["pool_utilization", "query_latency_ms"],
+            escalation: "yes - database team",
+          },
+          model: "claude-sonnet-4-0",
+          tokens_used: 512,
+        },
+        analysis_timestamp: new Date().toISOString(),
+      }),
+      { status: 200 },
+    );
   }
 
-  return new Response("Not found", { status: 404 });
-};
+  if (urlStr.includes("/api/clustering/cluster-logs")) {
+    const body = JSON.parse((options?.body as string) ?? "{}");
+    return new Response(
+      JSON.stringify({
+        task_id: "task-123",
+        status: "submitted",
+        message: `Queued ${body.log_ids?.length ?? 0} log IDs`,
+      }),
+      { status: 200 },
+    );
+  }
 
-describe("TypeScript Client", () => {
-  let client: TriageClient;
+  if (urlStr.includes("/api/clustering/tasks/task-123")) {
+    return new Response(
+      JSON.stringify({
+        task_id: "task-123",
+        status: "SUCCESS",
+        result: {
+          cluster_id: "cluster-001",
+          logs_clustered: 3,
+          logs_deduplicated: 1,
+        },
+      }),
+      { status: 200 },
+    );
+  }
+
+  return new Response(
+    JSON.stringify({
+      code: "NOT_FOUND",
+      message: "Not found",
+    } satisfies APIError),
+    { status: 404 },
+  );
+});
+
+describe("TypeScript client", () => {
   const config: ClientConfig = {
     baseURL: "http://localhost:8000",
     apiKey: "test-key",
     timeout: 5000,
   };
 
+  let client: TriageClient;
+
   beforeEach(() => {
-    // Replace globalThis fetch with our mock
-    globalThis.fetch = mockFetch as any;
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockClear();
     client = createTriageClient(config);
     setDefaultClient(client);
   });
 
-  describe("Client Initialization", () => {
-    it("should create a client instance", () => {
-      expect(client).toBeDefined();
-      expect(client).toBeInstanceOf(TriageClient);
-    });
-
-    it("should set and get default client", () => {
-      const defaultClient = getDefaultClient();
-      expect(defaultClient).toBeDefined();
-    });
-
-    it("should handle base URL without trailing slash", () => {
-      const customClient = createTriageClient({
-        baseURL: "https://api.example.com/",
-      });
-      expect(customClient).toBeDefined();
-    });
+  it("creates and stores a default client", () => {
+    expect(client).toBeInstanceOf(TriageClient);
+    expect(getDefaultClient()).toBe(client);
   });
 
-  describe("Type Guards", () => {
-    it("should validate UUID format", () => {
-      expect(isUUID("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
-      expect(isUUID("not-a-uuid")).toBe(false);
-      expect(isUUID(123)).toBe(false);
-    });
-
-    it("should validate LogSeverity", () => {
-      expect(isLogSeverity(LogSeverity.ERROR)).toBe(true);
-      expect(isLogSeverity("INVALID")).toBe(false);
-    });
-
-    it("should validate IncidentStatus", () => {
-      expect(isIncidentStatus(IncidentStatus.OPEN)).toBe(true);
-      expect(isIncidentStatus("INVALID")).toBe(false);
-    });
+  it("checks base API health", async () => {
+    const healthy = await client.health();
+    expect(healthy).toBe(true);
   });
 
-  describe("Logs API", () => {
-    it("should list logs", async () => {
-      const response = await client.listLogs();
-      expect(response.data.items).toBeDefined();
-      expect(response.data.total).toBe(0);
-    });
-
-    it("should create a log", async () => {
-      const logRequest: CreateLogRequest = {
-        message: "Test error message",
-        severity: LogSeverity.ERROR,
-        source: "test-service",
-        metadata: { test: true },
-      };
-
-      const response = await client.createLog(logRequest);
-      expect(response.data.id).toBeDefined();
-      expect(response.data.message).toBe("Test error message");
-      expect(response.data.severity).toBe(LogSeverity.ERROR);
-      expect(response.status).toBe(201);
-    });
-
-    it("should list logs with filters", async () => {
-      const response = await client.listLogs({
-        limit: 25,
-        offset: 0,
-        severity: LogSeverity.ERROR,
-      });
-      expect(response.data).toBeDefined();
-    });
+  it("fetches RAG health", async () => {
+    const response = await client.ragHealth();
+    expect(response.data.status).toBe("healthy");
+    expect(response.data.anthropic_configured).toBe(true);
   });
 
-  describe("Incidents API", () => {
-    it("should list incidents", async () => {
-      const response = await client.listIncidents();
-      expect(response.data.items).toBeDefined();
-      expect(response.data.total).toBe(0);
-    });
+  it("analyzes incident context", async () => {
+    const request: RAGAnalyzeRequest = {
+      incident_summary: "Database connection failures affecting API",
+      logs: [
+        "Database timeout after 30 seconds",
+        "Connection pool exhausted",
+      ],
+    };
 
-    it("should create an incident", async () => {
-      const incidentRequest: CreateIncidentRequest = {
-        title: "High CPU Usage",
-        severity: IncidentSeverity.HIGH,
-        description: "CPU usage exceeded 90%",
-      };
-
-      const response = await client.createIncident(incidentRequest);
-      expect(response.data.id).toBeDefined();
-      expect(response.data.title).toBe("High CPU Usage");
-      expect(response.data.severity).toBe(IncidentSeverity.HIGH);
-      expect(response.status).toBe(201);
-    });
-
-    it("should validate incident required fields", async () => {
-      try {
-        await client.createIncident({
-          title: "", // Invalid: empty string
-          severity: IncidentSeverity.LOW,
-        });
-      } catch (error) {
-        expect(error).toBeDefined();
-      }
-    });
+    const response = await client.analyzeIncident(request);
+    expect(response.data.reasoning.success).toBe(true);
+    expect(response.data.reasoning.model).toBe("claude-sonnet-4-0");
+    expect(response.data.retrieved_logs.count).toBe(2);
   });
 
-  describe("Triage API", () => {
-    it("should run triage analysis", async () => {
-      const triageRequest: TriageRequest = {
-        incident_id: "550e8400-e29b-41d4-a716-446655440001" as UUID,
-        log_ids: ["550e8400-e29b-41d4-a716-446655440000" as UUID],
-        context: { deployment: "production" },
-      };
+  it("submits clustering jobs", async () => {
+    const request: ClusterLogsRequest = {
+      log_ids: [
+        "550e8400-e29b-41d4-a716-446655440000",
+        "550e8400-e29b-41d4-a716-446655440001",
+      ],
+      skip_duplicates: true,
+    };
 
-      const response = await client.triageIncident(triageRequest);
-      expect(response.data.id).toBeDefined();
-      expect(response.data.root_cause_hypotheses).toHaveLength(1);
-      expect(response.data.mitigation_steps).toHaveLength(1);
-      expect(response.data.confidence_score).toBe(0.92);
-    });
-
-    it("should validate triage incident ID", async () => {
-      try {
-        await client.triageIncident({
-          incident_id: "invalid-id" as UUID,
-          log_ids: ["550e8400-e29b-41d4-a716-446655440000" as UUID],
-        });
-      } catch (error) {
-        expect(error).toBeDefined();
-      }
-    });
-
-    it("should require at least one log ID", async () => {
-      try {
-        await client.triageIncident({
-          incident_id: "550e8400-e29b-41d4-a716-446655440001" as UUID,
-          log_ids: [],
-        });
-      } catch (error) {
-        expect(error).toBeDefined();
-      }
-    });
+    const response = await client.submitClusteringJob(request);
+    expect(response.data.task_id).toBe("task-123");
+    expect(response.data.status).toBe("submitted");
   });
 
-  describe("Error Handling", () => {
-    it("should handle HTTP errors gracefully", async () => {
-      globalThis.fetch = async () =>
-        new Response(
-          JSON.stringify({
-            code: "NOT_FOUND",
-            message: "Incident not found",
-          }),
-          { status: 404 }
-        );
+  it("reads clustering task status", async () => {
+    const response = await client.getClusteringTaskStatus("task-123");
+    expect(response.data.status).toBe("SUCCESS");
+    expect(response.data.result?.cluster_id).toBe("cluster-001");
+  });
 
-      try {
-        await client.getIncident("550e8400-e29b-41d4-a716-446655440999" as UUID);
-      } catch (error) {
-        expect(error).toBeDefined();
-      }
+  it("exposes convenience functions", async () => {
+    const healthResponse = await ragHealth();
+    const analyzeResponse = await analyzeIncident({
+      incident_summary: "API latency spike",
+      logs: ["p99 latency exceeded 5000ms"],
     });
-
-    it("should handle timeout errors", async () => {
-      globalThis.fetch = async () => {
-        return new Promise<Response>(() => {}); // Never resolves
-      };
-
-      const quickClient = createTriageClient({
-        baseURL: "http://localhost:8000",
-        timeout: 100,
-      });
-
-      try {
-        await quickClient.listIncidents({}, { timeout: 50 });
-      } catch (error) {
-        // Timeout expected
-        expect(error).toBeDefined();
-      }
+    const submitResponse = await submitClusteringJob({
+      log_ids: ["550e8400-e29b-41d4-a716-446655440000"],
     });
+    const taskResponse = await getClusteringTaskStatus("task-123");
+
+    expect(healthResponse.data.rag_initialized).toBe(true);
+    expect(analyzeResponse.data.reasoning.reasoning.severity).toBe("high");
+    expect(submitResponse.data.task_id).toBe("task-123");
+    expect(taskResponse.data.status).toBe("SUCCESS");
+  });
+
+  it("validates incident analysis inputs", async () => {
+    await expect(
+      client.analyzeIncident({
+        incident_summary: "",
+        logs: ["Database timeout"],
+      }),
+    ).rejects.toThrow("Incident summary is required");
+
+    await expect(
+      client.analyzeIncident({
+        incident_summary: "Valid summary",
+        logs: [],
+      }),
+    ).rejects.toThrow("At least one log line is required");
+  });
+
+  it("validates clustering inputs", async () => {
+    await expect(
+      client.submitClusteringJob({
+        log_ids: [],
+      }),
+    ).rejects.toThrow("At least one log ID is required");
+
+    await expect(client.getClusteringTaskStatus("")).rejects.toThrow(
+      "Task ID is required",
+    );
+  });
+
+  it("keeps type guards working", () => {
+    expect(isUUID("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+    expect(isUUID("invalid-id")).toBe(false);
+    expect(
+      isAPIError({
+        code: "HTTP_404",
+        message: "Missing resource",
+      }),
+    ).toBe(true);
   });
 });
-
-

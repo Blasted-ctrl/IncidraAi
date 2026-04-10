@@ -215,6 +215,75 @@ export interface TriageFeedback {
   comment?: string | null;
 }
 
+export interface ClusterLogsRequest {
+  log_ids: string[];
+  cluster_id?: string | null;
+  skip_duplicates?: boolean;
+}
+
+export interface ClusterLogsResponse {
+  task_id: string;
+  status: string;
+  message: string;
+}
+
+export interface TaskStatusResponse {
+  task_id: string;
+  status: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+export interface RetrievedContent {
+  count: number;
+  documents: string[];
+  relevance_scores: number[];
+}
+
+export interface RAGHealthResponse {
+  status: string;
+  rag_initialized: boolean;
+  anthropic_configured: boolean;
+  embedding_model: string;
+  vector_store: string;
+  timestamp: DateTime;
+}
+
+export interface RAGReasoningPayload {
+  root_cause?: string;
+  severity?: string;
+  affected_services?: string[];
+  actions?: string[];
+  metrics?: string[];
+  escalation?: string;
+  raw_response?: string;
+  parse_error?: string;
+}
+
+export interface RAGReasoningResult {
+  success: boolean;
+  warning?: string | null;
+  reasoning: RAGReasoningPayload;
+  model: string;
+  tokens_used: number;
+}
+
+export interface RAGAnalyzeRequest {
+  incident_summary: string;
+  logs: string[];
+  cluster_info?: Record<string, unknown> | null;
+  top_k_logs?: number;
+  top_k_runbooks?: number;
+}
+
+export interface RAGAnalyzeResponse {
+  incident_summary: string;
+  retrieved_logs: RetrievedContent;
+  retrieved_runbooks: RetrievedContent;
+  reasoning: RAGReasoningResult;
+  analysis_timestamp: DateTime;
+}
+
 // ============================================================================
 // Error Type
 // ============================================================================

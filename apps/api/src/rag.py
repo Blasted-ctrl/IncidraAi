@@ -113,7 +113,7 @@ class EmbeddingStore:
 class IncidentReasoner:
     """Uses LLM to reason about incidents with retrieved context."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-3-5-sonnet-latest"):
         """
         Initialize LLM reasoning component.
         
@@ -124,6 +124,29 @@ class IncidentReasoner:
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self.model = model
         self.client = anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
+
+    def _candidate_models(self) -> List[str]:
+        """Return candidate Anthropic model IDs in fallback order."""
+        candidates = [
+            self.model,
+            os.getenv("ANTHROPIC_MODEL"),
+            "claude-sonnet-4-0",
+            "claude-sonnet-4-20250514",
+            "claude-3-7-sonnet-latest",
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-7-sonnet-latest",
+            "claude-3-5-haiku-latest",
+            "claude-3-5-haiku-20241022",
+            "claude-3-haiku-20240307",
+        ]
+
+        deduped = []
+        for candidate in candidates:
+            if candidate and candidate not in deduped:
+                deduped.append(candidate)
+        return deduped
     
     def reason_about_incident(
         self,
@@ -180,13 +203,32 @@ Provide:
 
 Format as JSON with these exact keys: root_cause, severity, affected_services, actions, metrics, escalation"""
         
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        message = None
+        last_error = None
+        selected_model = self.model
+
+        for candidate_model in self._candidate_models():
+            try:
+                message = self.client.messages.create(
+                    model=candidate_model,
+                    max_tokens=1024,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                selected_model = candidate_model
+                break
+            except Exception as exc:
+                last_error = exc
+                error_text = str(exc)
+                if "not_found_error" in error_text or "model:" in error_text:
+                    continue
+                raise
+
+        if message is None:
+            raise last_error if last_error else RuntimeError(
+                "No compatible Anthropic model could be selected."
+            )
         
         response_text = message.content[0].text
         
@@ -209,7 +251,7 @@ Format as JSON with these exact keys: root_cause, severity, affected_services, a
         return {
             "success": True,
             "reasoning": reasoning,
-            "model": self.model,
+            "model": selected_model,
             "tokens_used": message.usage.input_tokens + message.usage.output_tokens
         }
     

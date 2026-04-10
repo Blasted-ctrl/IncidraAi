@@ -115,7 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_hypotheses_confidence ON root_cause_hypotheses(co
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS mitigation_steps (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    triage_result_id UUID NOT NULL REFERENCES mitigation_steps(id) ON DELETE CASCADE,
+    triage_result_id UUID NOT NULL REFERENCES triage_results(id) ON DELETE CASCADE,
     step TEXT NOT NULL,
     "order" INTEGER NOT NULL,
     estimated_time_minutes INTEGER,

@@ -10,18 +10,15 @@ import psycopg2
 from psycopg2.extras import Json
 import os
 
+from .config import get_database_config
 from .dedup import is_log_duplicate, compute_log_hash, mark_log_hash_seen
+from .observability import get_tracer, job_retries_total
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 # Database configuration
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'database': os.getenv('DB_NAME', 'incident_triage'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'FordsonHigh12'),
-    'port': int(os.getenv('DB_PORT', 5432)),
-}
+DB_CONFIG = get_database_config()
 
 # ============================================================================
 # Custom Task Class with Dead-Letter Queue Support
@@ -38,6 +35,7 @@ class CallbackTask(Task):
     
     def on_retry(self, exc, task_id, args, kwargs, einfo):
         """Called when task is retried"""
+        job_retries_total.labels(task_name=self.name).inc()
         logger.warning(
             f"Task {self.name} (id={task_id}) retrying after error: {exc}"
         )
@@ -46,12 +44,12 @@ class CallbackTask(Task):
         """Called when task permanently fails (max retries exceeded)"""
         logger.error(
             f"Task {self.name} (id={task_id}) failed permanently: {exc}",
-            extra={'task_id': task_id, 'args': args},
+            extra={"task_id": task_id, "task_args": args},
             exc_info=einfo
         )
         
         # Route to dead-letter queue
-        send_to_dead_letter_queue.delay(
+        handle_dead_letter.delay(
             task_name=self.name,
             task_id=task_id,
             args=args,
@@ -97,97 +95,98 @@ def cluster_logs(
     """
     
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        
-        # Fetch logs from database
-        log_ids_str = ','.join(f"'{log_id}'" for log_id in log_ids)
-        cursor.execute(f"""
-            SELECT id, message, source, severity, timestamp
-            FROM logs
-            WHERE id IN ({log_ids_str})
-            ORDER BY timestamp DESC
-        """)
-        
-        logs = cursor.fetchall()
-        
-        if not logs:
-            logger.warning(f"No logs found for IDs: {log_ids}")
-            return {
-                "cluster_id": cluster_id,
-                "logs_clustered": 0,
-                "logs_deduplicated": 0,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "status": "no_logs_found",
-            }
-        
-        # Deduplication pass
-        deduplicated_logs = []
-        duplicate_count = 0
-        
-        for log_id, message, source, severity, timestamp in logs:
-            if skip_duplicates and is_log_duplicate(message, source, severity):
-                duplicate_count += 1
-                logger.info(f"Skipping duplicate log: {log_id}")
-                continue
+        with tracer.start_as_current_span("celery.cluster_logs"):
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
             
-            deduplicated_logs.append({
-                "id": log_id,
-                "message": message,
-                "source": source,
-                "severity": severity,
-                "hash": compute_log_hash(message, source, severity),
-            })
+            # Fetch logs from database
+            log_ids_str = ','.join(f"'{log_id}'" for log_id in log_ids)
+            cursor.execute(f"""
+                SELECT id, message, source, severity, timestamp
+                FROM logs
+                WHERE id IN ({log_ids_str})
+                ORDER BY timestamp DESC
+            """)
             
-            # Mark as seen
-            mark_log_hash_seen(message, source, severity)
-        
-        if not deduplicated_logs:
-            logger.info("All logs were duplicates, no clustering needed")
-            return {
-                "cluster_id": cluster_id,
-                "logs_clustered": 0,
+            logs = cursor.fetchall()
+            
+            if not logs:
+                logger.warning(f"No logs found for IDs: {log_ids}")
+                return {
+                    "cluster_id": cluster_id,
+                    "logs_clustered": 0,
+                    "logs_deduplicated": 0,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "status": "no_logs_found",
+                }
+            
+            # Deduplication pass
+            deduplicated_logs = []
+            duplicate_count = 0
+            
+            for log_id, message, source, severity, timestamp in logs:
+                if skip_duplicates and is_log_duplicate(message, source, severity):
+                    duplicate_count += 1
+                    logger.info(f"Skipping duplicate log: {log_id}")
+                    continue
+                
+                deduplicated_logs.append({
+                    "id": log_id,
+                    "message": message,
+                    "source": source,
+                    "severity": severity,
+                    "hash": compute_log_hash(message, source, severity),
+                })
+                
+                # Mark as seen
+                mark_log_hash_seen(message, source, severity)
+            
+            if not deduplicated_logs:
+                logger.info("All logs were duplicates, no clustering needed")
+                return {
+                    "cluster_id": cluster_id,
+                    "logs_clustered": 0,
+                    "logs_deduplicated": duplicate_count,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "status": "all_deduplicated",
+                }
+            
+            # Create or update cluster
+            if not cluster_id:
+                # Create new cluster
+                cursor.execute("""
+                    INSERT INTO clusters (name, description, log_count, incident_count)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    f"Cluster-{datetime.now(timezone.utc).isoformat()}",
+                    f"Auto-clustered {len(deduplicated_logs)} logs",
+                    len(deduplicated_logs),
+                    0,
+                ))
+                cluster_id = cursor.fetchone()[0]
+                logger.info(f"Created new cluster: {cluster_id}")
+            else:
+                # Update existing cluster
+                cursor.execute("""
+                    UPDATE clusters
+                    SET log_count = log_count + %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (len(deduplicated_logs), cluster_id))
+            
+            conn.commit()
+            
+            result = {
+                "cluster_id": str(cluster_id),
+                "logs_clustered": len(deduplicated_logs),
                 "logs_deduplicated": duplicate_count,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "status": "all_deduplicated",
+                "status": "success",
             }
-        
-        # Create or update cluster
-        if not cluster_id:
-            # Create new cluster
-            cursor.execute("""
-                INSERT INTO clusters (name, description, log_count, incident_count)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-            """, (
-                f"Cluster-{datetime.now(timezone.utc).isoformat()}",
-                f"Auto-clustered {len(deduplicated_logs)} logs",
-                len(deduplicated_logs),
-                0,
-            ))
-            cluster_id = cursor.fetchone()[0]
-            logger.info(f"Created new cluster: {cluster_id}")
-        else:
-            # Update existing cluster
-            cursor.execute("""
-                UPDATE clusters
-                SET log_count = log_count + %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-            """, (len(deduplicated_logs), cluster_id))
-        
-        conn.commit()
-        
-        result = {
-            "cluster_id": str(cluster_id),
-            "logs_clustered": len(deduplicated_logs),
-            "logs_deduplicated": duplicate_count,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status": "success",
-        }
-        
-        logger.info(f"Clustering completed: {result}")
-        return result
+            
+            logger.info(f"Clustering completed: {result}")
+            return result
         
     except Exception as exc:
         logger.error(f"Clustering task failed: {exc}")
@@ -244,53 +243,54 @@ def handle_dead_letter(
     """
     
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        
-        # Check if dead_letter_queue table exists, create if not
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS dead_letter_queue (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                task_name VARCHAR(255) NOT NULL,
-                task_id VARCHAR(255) NOT NULL UNIQUE,
-                task_args JSONB,
-                task_kwargs JSONB,
-                error_message TEXT,
-                error_traceback TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                status VARCHAR(50) DEFAULT 'pending'
-            )
-        """)
-        
-        # Insert into dead-letter queue
-        cursor.execute("""
-            INSERT INTO dead_letter_queue 
-            (task_name, task_id, task_args, task_kwargs, error_message, error_traceback)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (task_id) DO UPDATE SET
-                status = 'retry_pending',
-                error_message = EXCLUDED.error_message,
-                error_traceback = EXCLUDED.error_traceback
-        """, (
-            task_name,
-            task_id,
-            Json(args if isinstance(args, dict) else {"args": args}),
-            Json(kwargs),
-            error_message,
-            error_traceback,
-        ))
-        
-        conn.commit()
-        
-        dlq_record = {
-            "task_id": task_id,
-            "task_name": task_name,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-            "status": "recorded_in_dlq",
-        }
-        
-        logger.warning(f"Task recorded in dead-letter queue: {dlq_record}")
-        return dlq_record
+        with tracer.start_as_current_span("celery.handle_dead_letter"):
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
+            # Check if dead_letter_queue table exists, create if not
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dead_letter_queue (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    task_name VARCHAR(255) NOT NULL,
+                    task_id VARCHAR(255) NOT NULL UNIQUE,
+                    task_args JSONB,
+                    task_kwargs JSONB,
+                    error_message TEXT,
+                    error_traceback TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(50) DEFAULT 'pending'
+                )
+            """)
+            
+            # Insert into dead-letter queue
+            cursor.execute("""
+                INSERT INTO dead_letter_queue 
+                (task_name, task_id, task_args, task_kwargs, error_message, error_traceback)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (task_id) DO UPDATE SET
+                    status = 'retry_pending',
+                    error_message = EXCLUDED.error_message,
+                    error_traceback = EXCLUDED.error_traceback
+            """, (
+                task_name,
+                task_id,
+                Json(args if isinstance(args, dict) else {"args": args}),
+                Json(kwargs),
+                error_message,
+                error_traceback,
+            ))
+            
+            conn.commit()
+            
+            dlq_record = {
+                "task_id": task_id,
+                "task_name": task_name,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "status": "recorded_in_dlq",
+            }
+            
+            logger.warning(f"Task recorded in dead-letter queue: {dlq_record}")
+            return dlq_record
         
     except Exception as exc:
         logger.error(f"Failed to record in dead-letter queue: {exc}")

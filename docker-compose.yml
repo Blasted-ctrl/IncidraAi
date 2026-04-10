@@ -52,6 +52,7 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=FordsonHigh12
       - DB_PORT=5432
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,6 +77,7 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=FordsonHigh12
       - DB_PORT=5432
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,6 +102,7 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=FordsonHigh12
       - DB_PORT=5432
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

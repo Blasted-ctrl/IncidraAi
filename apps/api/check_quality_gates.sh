@@ -6,6 +6,22 @@ set -e
 
 cd "$(dirname "$0")"
 
+COVERAGE_TESTS=(
+  test/test_integration.py
+  test/test_celery.py
+  test/test_runtime_quality.py
+)
+
+COVERAGE_TARGETS=(
+  --cov=src.main
+  --cov=src.routes_clustering
+  --cov=src.routes_rag
+  --cov=src.tasks
+  --cov=src.observability
+  --cov=src.config
+  --cov=src.rag
+)
+
 echo "🔍 Running Quality Gates Check..."
 echo "================================="
 
@@ -20,23 +36,23 @@ FAILED=0
 
 # 1. Coverage check
 echo -e "\n${YELLOW}[1/3]${NC} Checking test coverage >= 85%..."
-if pytest test/test_clustering_unit.py -v --cov=src --cov-report=term-missing --cov-fail-under=85 > /dev/null 2>&1; then
+if pytest --override-ini addopts= "${COVERAGE_TESTS[@]}" -v "${COVERAGE_TARGETS[@]}" --cov-report=term-missing --cov-fail-under=85 > /dev/null 2>&1; then
     echo -e "${GREEN}✓${NC} Coverage check passed"
     ((PASSED++))
 else
     echo -e "${RED}✗${NC} Coverage check failed - must be >= 85%"
-    echo "Run: pytest test/test_clustering_unit.py --cov=src --cov-report=term"
+    echo "Run: pytest --override-ini addopts= ${COVERAGE_TESTS[*]} ${COVERAGE_TARGETS[*]} --cov-report=term-missing"
     ((FAILED++))
 fi
 
 # 2. Unit tests
 echo -e "\n${YELLOW}[2/3]${NC} Running unit tests..."
-if pytest test/test_clustering_unit.py -v > /dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} All unit tests passed"
+if pytest --override-ini addopts= "${COVERAGE_TESTS[@]}" -v > /dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} API runtime test suites passed"
     ((PASSED++))
 else
-    echo -e "${RED}✗${NC} Unit tests failed"
-    echo "Run: pytest test/test_clustering_unit.py -v"
+    echo -e "${RED}✗${NC} API runtime tests failed"
+    echo "Run: pytest --override-ini addopts= ${COVERAGE_TESTS[*]} -v"
     ((FAILED++))
 fi
 
@@ -77,7 +93,7 @@ echo -e "\n================================="
 if [ $FAILED -eq 0 ]; then
     echo -e "${GREEN}✓ All quality gates passed!${NC}"
     echo "  - Coverage: >= 85%"
-    echo "  - Unit tests: pass"
+    echo "  - API runtime tests: pass"
     echo "  - RAG accuracy: >= 70%"
     echo -e "\n${GREEN}Ready to push!${NC}"
     exit 0

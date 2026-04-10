@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
+from .observability import create_metrics_app, setup_tracing
 from .routes_clustering import router as clustering_router
 from .routes_rag import router as rag_router
 
@@ -18,7 +19,12 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "localhost"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "localhost",
+        "127.0.0.1",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -26,6 +32,8 @@ app.add_middleware(
 # Include routers
 app.include_router(clustering_router)
 app.include_router(rag_router)
+app.mount("/metrics", create_metrics_app())
+setup_tracing(app)
 
 
 @app.get("/")

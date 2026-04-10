@@ -8,10 +8,13 @@ from datetime import datetime, timezone
 import logging
 
 from .celery_app import app as celery_app
+from .config import get_database_config
+from .observability import get_tracer, ingestion_latency_seconds, track_latency
 from .tasks import cluster_logs, check_clustering_health
 from .dedup import get_dedup_stats
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 router = APIRouter(prefix="/api/clustering", tags=["clustering"])
 
@@ -76,21 +79,26 @@ async def cluster_logs_endpoint(request: ClusterLogsRequest):
     """
     
     try:
-        # Submit task to Celery
-        task = cluster_logs.apply_async(
-            args=[request.log_ids],
-            kwargs={
-                "cluster_id": request.cluster_id,
-                "skip_duplicates": request.skip_duplicates,
-            },
-            queue="clustering",
-        )
-        
-        return ClusterLogsResponse(
-            task_id=task.id,
-            status="submitted",
-            message=f"Clustering job submitted. Check status with /api/clustering/tasks/{task.id}",
-        )
+        with tracer.start_as_current_span("cluster_logs_endpoint"):
+            with track_latency(
+                ingestion_latency_seconds,
+                "/api/clustering/cluster-logs",
+            ):
+                # Submit task to Celery
+                task = cluster_logs.apply_async(
+                    args=[request.log_ids],
+                    kwargs={
+                        "cluster_id": request.cluster_id,
+                        "skip_duplicates": request.skip_duplicates,
+                    },
+                    queue="clustering",
+                )
+
+                return ClusterLogsResponse(
+                    task_id=task.id,
+                    status="submitted",
+                    message=f"Clustering job submitted. Check status with /api/clustering/tasks/{task.id}",
+                )
     
     except Exception as exc:
         logger.error(f"Failed to submit clustering job: {exc}")
@@ -269,15 +277,7 @@ async def get_dead_letter_queue(
         import psycopg2
         import os
         
-        DB_CONFIG = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'database': os.getenv('DB_NAME', 'incident_triage'),
-            'user': os.getenv('DB_USER', 'postgres'),
-            'password': os.getenv('DB_PASSWORD', 'FordsonHigh12'),
-            'port': int(os.getenv('DB_PORT', 5432)),
-        }
-        
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**get_database_config())
         cursor = conn.cursor()
         
         query = "SELECT * FROM dead_letter_queue"
